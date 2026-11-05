@@ -34,11 +34,21 @@ enum class Op { Grayscale, GaussianBlur, Sobel, Threshold, Canny };
 PV_API const char* to_string(Backend b);
 PV_API bool        backend_available(Backend b);
 
-// Tunable thresholds used by the heuristic dispatcher (pixels per image).
+// Per-operation switch point (pixels per image): below it the thread-fork overhead
+// beats the gain, so Auto stays sequential. Defaults are a fixed heuristic;
+// calibrate() / load_calibration() replace them with values measured on this machine.
 struct DispatchConfig {
-    long omp_min_pixels = 100000;   // below this, thread overhead beats the gain
+    static constexpr int kOps = 5;                 // number of Op values
+    long omp_min_pixels[kOps] = {100000, 100000, 100000, 100000, 100000};
 };
 PV_API DispatchConfig& dispatch_config();
+PV_API void reset_dispatch_defaults();             // back to the static heuristic
+
+// Calibration: micro-benchmark sequential vs OpenMP on synthetic images and fit
+// the per-op switch points. Takes roughly a few seconds.
+PV_API void calibrate(int reps = 5);
+PV_API bool save_calibration(const char* path);
+PV_API bool load_calibration(const char* path);    // false if file missing/invalid
 
 // Resolve Auto (or an unavailable backend) to a concrete one.
 PV_API Backend choose_backend(Op op, int width, int height, Backend requested = Backend::Auto);

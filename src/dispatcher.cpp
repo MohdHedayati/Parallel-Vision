@@ -33,11 +33,13 @@ DispatchConfig& dispatch_config() {
 
 // Heuristic dispatcher: cost of forking threads is roughly fixed, work grows
 // with pixel count, so small images stay sequential.
-Backend choose_backend(Op, int width, int height, Backend requested) {
+void reset_dispatch_defaults() { dispatch_config() = DispatchConfig(); }
+
+Backend choose_backend(Op op, int width, int height, Backend requested) {
     if (requested != Backend::Auto)
         return backend_available(requested) ? requested : Backend::OpenMP;
     long pixels = static_cast<long>(width) * height;
-    if (omp_get_max_threads() < 2 || pixels < dispatch_config().omp_min_pixels)
+    if (omp_get_max_threads() < 2 || pixels < dispatch_config().omp_min_pixels[static_cast<int>(op)])
         return Backend::Sequential;
     return Backend::OpenMP;
 }

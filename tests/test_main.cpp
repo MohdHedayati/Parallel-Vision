@@ -55,6 +55,20 @@ int main() {
     CHECK(pv::choose_backend(pv::Op::Canny, 4000, 4000) != Backend::CUDA);
     CHECK(pv::choose_backend(pv::Op::Canny, 32, 32, Backend::CUDA) == Backend::OpenMP);  // unavailable -> fallback
 
+    // Calibration round-trip: per-op thresholds survive save/load and drive the dispatcher.
+    pv::dispatch_config().omp_min_pixels[static_cast<int>(pv::Op::Sobel)] = 1234;
+    pv::dispatch_config().omp_min_pixels[static_cast<int>(pv::Op::Canny)] = 0;
+    CHECK(pv::save_calibration("pv_test_cal.txt"));
+    pv::reset_dispatch_defaults();
+    CHECK(pv::dispatch_config().omp_min_pixels[static_cast<int>(pv::Op::Sobel)] == 100000);
+    CHECK(pv::load_calibration("pv_test_cal.txt"));
+    CHECK(pv::dispatch_config().omp_min_pixels[static_cast<int>(pv::Op::Sobel)] == 1234);
+    CHECK(!pv::load_calibration("does_not_exist.txt"));
+    CHECK(pv::choose_backend(pv::Op::Canny, 2, 2) == Backend::OpenMP);      // threshold 0 -> always OpenMP
+    CHECK(pv::choose_backend(pv::Op::Sobel, 30, 30) == Backend::Sequential); // 900 < 1234
+    pv::reset_dispatch_defaults();
+    std::remove("pv_test_cal.txt");
+
     std::printf(failures ? "%d test(s) FAILED\n" : "all tests passed\n", failures);
     return failures ? 1 : 0;
 }

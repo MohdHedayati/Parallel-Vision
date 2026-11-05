@@ -21,6 +21,7 @@ find_package(OpenMP REQUIRED COMPONENTS CXX)
 # ---- core shared library (no OpenCV dependency) ----
 add_library(pv SHARED
   src/dispatcher.cpp
+  src/calibrate.cpp
   src/color.cpp
   src/filters.cpp
   src/edges.cpp
@@ -46,6 +47,10 @@ add_test(NAME pv_tests COMMAND pv_tests)
 # ---- benchmarks (synthetic images, CSV output) ----
 add_executable(pv_bench bench/bench.cpp)
 target_link_libraries(pv_bench PRIVATE pv)
+
+# heuristic vs calibrated dispatcher comparison (CSV + accuracy summary)
+add_executable(pv_dispatch_report bench/dispatch_report.cpp)
+target_link_libraries(pv_dispatch_report PRIVATE pv)
 
 # ---- CLI ----
 if(PV_BUILD_CLI)

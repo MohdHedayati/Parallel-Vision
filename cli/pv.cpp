@@ -26,15 +26,29 @@ static cv::Mat to_mat(const pv::Image& im) {
 int main(int argc, char** argv) {
     if (argc < 4) {
         std::printf("usage: pv <canny|sobel|blur|gray|threshold> in out [--backend auto|seq|omp]\n"
-                    "          [--low N] [--high N] [--sigma S] [--t N|otsu]\n");
+                    "          [--low N] [--high N] [--sigma S] [--t N|otsu]\n"
+                    "          [--calibrate | --use-calibration]\n");
         return 1;
     }
     std::string cmd = argv[1];
     pv::Backend backend = pv::Backend::Auto;
     double low = 50, high = 150, sigma = 1.4;
     int thr = -1;  // -1 = otsu
-    for (int i = 4; i + 1 < argc; i += 2) {
-        std::string k = argv[i], v = argv[i + 1];
+    for (int i = 4; i < argc; ) {
+        std::string k = argv[i];
+        if (k == "--calibrate") {   // measure switch points now and cache them
+            pv::calibrate();
+            pv::save_calibration("pv_calibration.txt");
+            ++i; continue;
+        }
+        if (k == "--use-calibration") {   // load cached switch points if present
+            if (!pv::load_calibration("pv_calibration.txt"))
+                std::fprintf(stderr, "no pv_calibration.txt, using heuristic (run with --calibrate first)\n");
+            ++i; continue;
+        }
+        if (i + 1 >= argc) break;
+        std::string v = argv[i + 1];
+        i += 2;
         if (k == "--backend") backend = v == "seq" ? pv::Backend::Sequential : v == "omp" ? pv::Backend::OpenMP : pv::Backend::Auto;
         else if (k == "--low") low = std::atof(v.c_str());
         else if (k == "--high") high = std::atof(v.c_str());
