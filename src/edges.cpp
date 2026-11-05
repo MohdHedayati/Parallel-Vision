@@ -1,4 +1,5 @@
 #include "parallel.hpp"
+#include "internal.hpp"
 #include <cmath>
 #include <vector>
 
@@ -53,70 +54,27 @@ Gradient compute_gradient(const Image& g, Backend b, float cut) {
     return out;
 }
 
-// Non-maximum suppression: keep only local maxima along the gradient direction.
-Buf<float> non_max_suppress(const Gradient& g, Backend b) {
+// Non-maximum suppression -> compact labels: 0 = not an edge candidate, 1 = weak (>= low),
+// 2 = strong (>= high). Hysteresis only ever compares against low/high, so labels carry
+// everything it needs at a quarter of the memory (and a quarter of the MPI traffic).
+Buf<uint8_t> non_max_suppress(const Gradient& g, Backend b, float hi) {
     const int w = g.w, h = g.h;
     static const int dx[4] = {1, 1, 0, 1}, dy[4] = {0, 1, 1, -1};
-    Buf<float> out(static_cast<size_t>(w) * h);
+    Buf<uint8_t> out(static_cast<size_t>(w) * h);
     for_rows(b, 0, h, [&](int y) {
-        float* o = &out[static_cast<size_t>(y) * w];
-        if (y == 0 || y == h - 1) { for (int x = 0; x < w; ++x) o[x] = 0.f; return; }
-        o[0] = 0.f; o[w - 1] = 0.f;
+        uint8_t* o = &out[static_cast<size_t>(y) * w];
+        if (y == 0 || y == h - 1) { for (int x = 0; x < w; ++x) o[x] = 0; return; }
+        o[0] = 0; o[w - 1] = 0;
         for (int x = 1; x < w - 1; ++x) {
             size_t i = static_cast<size_t>(y) * w + x;
             float m = g.mag[i];
-            if (m == 0.f) { o[x] = 0.f; continue; }   // sub-threshold pixel: nothing to suppress
+            if (m == 0.f) { o[x] = 0; continue; }   // sub-threshold pixel: nothing to suppress
             int d = g.dir[i];
             float a = g.mag[static_cast<size_t>(y + dy[d]) * w + (x + dx[d])];
             float c = g.mag[static_cast<size_t>(y - dy[d]) * w + (x - dx[d])];
-            o[x] = (m >= a && m >= c) ? m : 0.f;
+            o[x] = (m >= a && m >= c) ? (m >= hi ? 2 : 1) : 0;
         }
     });
-    return out;
-}
-
-// Hysteresis: strong seeds flood into connected weak pixels. The seed scan is parallel;
-// the flood fill is inherently serial but only touches edge pixels. The result is the
-// set of weak pixels connected to a seed, so it does not depend on visit order.
-Image hysteresis(const Buf<float>& nms, int w, int h, float lo, float hi, Backend b) {
-    Image out(w, h, 1);
-    std::vector<int> stack;
-    if (b == Backend::OpenMP) {
-        #pragma omp parallel
-        {
-            std::vector<int> local;
-            #pragma omp for schedule(static) nowait
-            for (int y = 0; y < h; ++y)
-                for (int x = 0; x < w; ++x)
-                    if (nms[static_cast<size_t>(y) * w + x] >= hi) {
-                        out.row(y)[x] = 255;
-                        local.push_back(y * w + x);
-                    }
-            #pragma omp critical
-            stack.insert(stack.end(), local.begin(), local.end());
-        }
-    } else {
-        for (int y = 0; y < h; ++y)
-            for (int x = 0; x < w; ++x)
-                if (nms[static_cast<size_t>(y) * w + x] >= hi) {
-                    out.row(y)[x] = 255;
-                    stack.push_back(y * w + x);
-                }
-    }
-    while (!stack.empty()) {
-        int p = stack.back(); stack.pop_back();
-        int py = p / w, px = p % w;
-        for (int dy = -1; dy <= 1; ++dy)
-            for (int dx = -1; dx <= 1; ++dx) {
-                int ny = py + dy, nx = px + dx;
-                if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-                uint8_t& o = out.row(ny)[nx];
-                if (o == 0 && nms[static_cast<size_t>(ny) * w + nx] >= lo) {
-                    o = 255;
-                    stack.push_back(ny * w + nx);
-                }
-            }
-    }
     return out;
 }
 
@@ -134,13 +92,68 @@ Image sobel(const Image& gray, Backend req) {
     return out;
 }
 
-Image canny(const Image& in, double low, double high, double sigma, Backend req) {
-    Backend b = choose_backend(Op::Canny, in.width, in.height, req);
-    Image gray = to_gray(in, b);
+namespace detail {
+
+Buf<uint8_t> canny_labels(const Image& gray, double low, double high, double sigma, Backend b) {
     Image blurred = gaussian_blur(gray, sigma, b);
     Gradient g = compute_gradient(blurred, b, static_cast<float>(low));
-    Buf<float> nms = non_max_suppress(g, b);
-    return hysteresis(nms, g.w, g.h, static_cast<float>(low), static_cast<float>(high), b);
+    return non_max_suppress(g, b, static_cast<float>(high));
+}
+
+// Hysteresis: strong seeds flood into connected weak pixels. The seed scan is parallel;
+// the flood fill is inherently serial but only touches edge pixels. The result is the
+// set of weak pixels connected to a seed, so it does not depend on visit order.
+Image hysteresis_from_labels(const uint8_t* lab, int w, int h, Backend b) {
+    Image out(w, h, 1);
+    std::vector<int> stack;
+    if (b == Backend::OpenMP) {
+        #pragma omp parallel
+        {
+            std::vector<int> local;
+            #pragma omp for schedule(static) nowait
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                    if (lab[static_cast<size_t>(y) * w + x] == 2) {
+                        out.row(y)[x] = 255;
+                        local.push_back(y * w + x);
+                    }
+            #pragma omp critical
+            stack.insert(stack.end(), local.begin(), local.end());
+        }
+    } else {
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                if (lab[static_cast<size_t>(y) * w + x] == 2) {
+                    out.row(y)[x] = 255;
+                    stack.push_back(y * w + x);
+                }
+    }
+    while (!stack.empty()) {
+        int p = stack.back(); stack.pop_back();
+        int py = p / w, px = p % w;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                int ny = py + dy, nx = px + dx;
+                if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                uint8_t& o = out.row(ny)[nx];
+                if (o == 0 && lab[static_cast<size_t>(ny) * w + nx] != 0) {
+                    o = 255;
+                    stack.push_back(ny * w + nx);
+                }
+            }
+    }
+    return out;
+}
+
+} // namespace detail
+
+Image canny(const Image& in, double low, double high, double sigma, Backend req) {
+    if (req == Backend::MPI && backend_available(Backend::MPI))
+        return mpi_canny(in, low, high, sigma);   // collective: see pv.hpp
+    Backend b = choose_backend(Op::Canny, in.width, in.height, req);
+    Image gray = to_gray(in, b);
+    Buf<uint8_t> lab = detail::canny_labels(gray, low, high, sigma, b);
+    return detail::hysteresis_from_labels(lab.data(), gray.width, gray.height, b);
 }
 
 } // namespace pv

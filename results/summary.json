@@ -1,0 +1,162 @@
+{
+  "threads": 8,
+  "scaling_4096": [
+    {
+      "config": "Sequential",
+      "ms": 250.1776,
+      "speedup": 1.0,
+      "workers": 1,
+      "efficiency": 1.0
+    },
+    {
+      "config": "OpenMP 8 threads",
+      "ms": 134.3742,
+      "speedup": 1.8617978748896737,
+      "workers": 8,
+      "efficiency": 0.23272473436120922
+    },
+    {
+      "config": "MPI 2 ranks",
+      "ms": 187.1032,
+      "speedup": 1.3371102151112328,
+      "workers": 2,
+      "efficiency": 0.6685551075556164
+    },
+    {
+      "config": "MPI 4 ranks",
+      "ms": 163.385,
+      "speedup": 1.5312152278360929,
+      "workers": 4,
+      "efficiency": 0.3828038069590232
+    },
+    {
+      "config": "MPI 8 ranks",
+      "ms": 148.366,
+      "speedup": 1.6862192146448647,
+      "workers": 8,
+      "efficiency": 0.21077740183060809
+    },
+    {
+      "config": "Hybrid 2 ranks x 4 thr",
+      "ms": 134.836,
+      "speedup": 1.8554214008128391,
+      "workers": 8,
+      "efficiency": 0.2319276751016049
+    },
+    {
+      "config": "Hybrid 4 ranks x 2 thr",
+      "ms": 134.2454,
+      "speedup": 1.863584152604112,
+      "workers": 8,
+      "efficiency": 0.232948019075514
+    }
+  ],
+  "best_by_size": [
+    {
+      "size": 32,
+      "seq_ms": 0.0152,
+      "best": "OpenMP",
+      "best_ms": 0.3123,
+      "speedup": 0.04867114953570285
+    },
+    {
+      "size": 64,
+      "seq_ms": 0.0501,
+      "best": "OpenMP",
+      "best_ms": 0.3552,
+      "speedup": 0.14104729729729729
+    },
+    {
+      "size": 128,
+      "seq_ms": 0.2974,
+      "best": "OpenMP",
+      "best_ms": 0.5466,
+      "speedup": 0.544090742773509
+    },
+    {
+      "size": 256,
+      "seq_ms": 1.223,
+      "best": "MPI 2",
+      "best_ms": 0.894,
+      "speedup": 1.3680089485458613
+    },
+    {
+      "size": 512,
+      "seq_ms": 4.2745,
+      "best": "OpenMP",
+      "best_ms": 3.0298,
+      "speedup": 1.4108191959865337
+    },
+    {
+      "size": 1024,
+      "seq_ms": 17.4898,
+      "best": "OpenMP",
+      "best_ms": 9.704,
+      "speedup": 1.802328936521022
+    },
+    {
+      "size": 2048,
+      "seq_ms": 69.9246,
+      "best": "OpenMP",
+      "best_ms": 35.5072,
+      "speedup": 1.9693076333813988
+    },
+    {
+      "size": 4096,
+      "seq_ms": 250.1776,
+      "best": "OpenMP",
+      "best_ms": 134.3742,
+      "speedup": 1.8617978748896737
+    }
+  ],
+  "dispatch": [
+    {
+      "strategy": "Always sequential",
+      "total_vs_oracle_pct": 200.88721859523594,
+      "geomean": 1.4768561046243351,
+      "worst": 3.280238950252736,
+      "within10": 44.285714285714285
+    },
+    {
+      "strategy": "Always OpenMP",
+      "total_vs_oracle_pct": 102.08806183778711,
+      "geomean": 2.048862456973049,
+      "worst": 87.28571428571429,
+      "within10": 60.0
+    },
+    {
+      "strategy": "pv heuristic",
+      "total_vs_oracle_pct": 100.93950207228535,
+      "geomean": 1.021581981138333,
+      "worst": 1.7113654946852004,
+      "within10": 94.28571428571428
+    },
+    {
+      "strategy": "pv calibrated",
+      "total_vs_oracle_pct": 100.53868748656711,
+      "geomean": 1.0207631979744007,
+      "worst": 2.1225720026791697,
+      "within10": 95.71428571428572
+    }
+  ],
+  "dispatch_cases": 70,
+  "small_always_omp_slowdown": 1.240723288021341,
+  "large_always_seq_slowdown": 2.161274233120313,
+  "opencv_4096": {
+    "pv_seq_ms": 300.1736,
+    "pv_omp_ms": 136.6135,
+    "pv_auto_ms": 143.9565,
+    "cv_1thread_ms": 133.8434,
+    "cv_nthreads_ms": 43.5621
+  },
+  "iou": 0.973,
+  "edge_px_pv": 56738,
+  "edge_px_cv": 55745,
+  "switch_points": {
+    "grayscale": 147456,
+    "blur": 36864,
+    "sobel": 36864,
+    "threshold": 262144,
+    "canny": 65536
+  }
+}

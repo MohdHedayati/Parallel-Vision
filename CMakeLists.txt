@@ -22,6 +22,7 @@ find_package(OpenMP REQUIRED COMPONENTS CXX)
 add_library(pv SHARED
   src/dispatcher.cpp
   src/calibrate.cpp
+  src/mpi_backend.cpp
   src/color.cpp
   src/filters.cpp
   src/edges.cpp
@@ -37,9 +38,13 @@ target_link_libraries(pv PUBLIC OpenMP::OpenMP_CXX)
 
 if(PV_WITH_MPI)
   find_package(MPI REQUIRED COMPONENTS CXX)
-  target_sources(pv PRIVATE src/mpi_backend.cpp)
   target_compile_definitions(pv PUBLIC PV_HAVE_MPI)
   target_link_libraries(pv PUBLIC MPI::MPI_CXX)
+
+  add_executable(pv_mpi_tests tests/test_mpi.cpp)
+  target_link_libraries(pv_mpi_tests PRIVATE pv)
+  add_executable(pv_mpi_bench bench/mpi_bench.cpp)
+  target_link_libraries(pv_mpi_bench PRIVATE pv)
 endif()
 
 # ---- tests ----

@@ -62,4 +62,20 @@ PV_API int   otsu_threshold(const Image& gray);
 PV_API Image canny(const Image& in, double low = 50, double high = 150,
                    double sigma = 1.4, Backend b = Backend::Auto);
 
+// ---- MPI backend (distributed memory) ----
+// Row-block decomposition: rank 0 scatters horizontal strips, neighbouring ranks exchange
+// halo rows (depth = blur radius + 2), every rank runs blur/gradient/NMS on its strip, and
+// the compact edge labels are gathered on rank 0 for the (global) hysteresis step.
+// COLLECTIVE: every rank must call mpi_canny. Only rank 0's `in` is read; only rank 0
+// receives the result (other ranks get an empty Image). Results are bit-identical to canny().
+// `local` is the backend each rank uses on its own strip (Sequential or OpenMP => hybrid).
+// Without PV_WITH_MPI these throw / return false.
+PV_API bool  mpi_init(int* argc, char*** argv);   // MPI_Init unless already initialised
+PV_API void  mpi_finalize();
+PV_API int   mpi_rank();
+PV_API int   mpi_size();
+PV_API void  mpi_barrier();
+PV_API Image mpi_canny(const Image& in, double low = 50, double high = 150,
+                       double sigma = 1.4, Backend local = Backend::Sequential);
+
 } // namespace pv
