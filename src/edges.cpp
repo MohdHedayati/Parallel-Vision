@@ -151,6 +151,7 @@ Image canny(const Image& in, double low, double high, double sigma, Backend req)
     if (req == Backend::MPI && backend_available(Backend::MPI))
         return mpi_canny(in, low, high, sigma);   // collective: see pv.hpp
     Backend b = choose_backend(Op::Canny, in.width, in.height, req);
+    if (b == Backend::CUDA) return cuda_canny(in, low, high, sigma);
     Image gray = to_gray(in, b);
     Buf<uint8_t> lab = detail::canny_labels(gray, low, high, sigma, b);
     return detail::hysteresis_from_labels(lab.data(), gray.width, gray.height, b);

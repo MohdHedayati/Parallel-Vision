@@ -1,6 +1,9 @@
+// Calibration: measure where OpenMP (and CUDA) start to beat sequential on THIS machine.
 #include "pv/pv.hpp"
+#include <algorithm>
 #include <chrono>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -15,47 +18,75 @@ Image synth(int w, int h, int c) {
     return im;
 }
 
-void run(Op op, const Image& rgb, const Image& gray, Backend b) {
-    switch (op) {
-        case Op::Grayscale:    to_gray(rgb, b); break;
-        case Op::GaussianBlur: gaussian_blur(gray, 1.4, b); break;
-        case Op::Sobel:        sobel(gray, b); break;
-        case Op::Threshold:    threshold(gray, 128, b); break;
-        case Op::Canny:        canny(rgb, 50, 150, 1.4, b); break;
-    }
-}
-
-double best_ms(Op op, const Image& rgb, const Image& gray, Backend b, int reps) {
-    run(op, rgb, gray, b);  // warm-up
+template <class F>
+double best_ms(F&& f, int reps) {
+    f();  // warm-up
     double best = 1e30;
     for (int i = 0; i < reps; ++i) {
         auto t0 = std::chrono::steady_clock::now();
-        run(op, rgb, gray, b);
+        f();
         double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         if (ms < best) best = ms;
     }
     return best;
 }
 
+// Original rule: smallest size from which the parallel backend wins by >= 10 % at EVERY larger size.
+long strict_switch(const std::vector<int>& sides, const std::vector<double>& ratio) {
+    const int n = static_cast<int>(sides.size());
+    int first = n;
+    while (first > 0 && ratio[first - 1] < 0.9) --first;
+    return first == n ? LONG_MAX : first == 0 ? 0 : static_cast<long>(sides[first]) * sides[first];
+}
+
+// Robust rule: smooth log(parallel/sequential) with a 3-point median (one noisy measurement
+// cannot move the answer), find the point from which it stays below zero, and interpolate
+// the zero crossing in log-size instead of snapping to the measurement grid.
+long robust_switch(const std::vector<int>& sides, const std::vector<double>& ratio) {
+    const int n = static_cast<int>(sides.size());
+    std::vector<double> lr(n), s(n);
+    for (int i = 0; i < n; ++i) lr[i] = std::log(ratio[i]);
+    for (int i = 0; i < n; ++i) {
+        if (i == 0 || i == n - 1) { s[i] = lr[i]; continue; }
+        double a = lr[i - 1], b = lr[i], c = lr[i + 1];
+        s[i] = std::max(std::min(a, b), std::min(std::max(a, b), c));   // median of three
+    }
+    int first = n;
+    while (first > 0 && s[first - 1] < 0) --first;
+    if (first == n) return LONG_MAX;
+    if (first == 0) return 0;
+    const double t = s[first - 1] / (s[first - 1] - s[first]);          // s[first-1] >= 0 > s[first]
+    const double n0 = static_cast<double>(sides[first - 1]) * sides[first - 1];
+    const double n1 = static_cast<double>(sides[first]) * sides[first];
+    return static_cast<long>(std::llround(std::exp(std::log(n0) + t * (std::log(n1) - std::log(n0)))));
+}
+
 } // namespace
 
-void calibrate(int reps) {
-    static const int sides[] = {16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024};
-    constexpr int n = sizeof(sides) / sizeof(sides[0]);
+void calibrate(int reps, bool robust) {
+    static const int kSides[] = {16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024};
+    const std::vector<int> sides(std::begin(kSides), std::end(kSides));
+    const int n = static_cast<int>(sides.size());
+    const bool gpu = cuda_available();
+    std::vector<double> gpu_ratio(n, 1.0);
+
     for (int o = 0; o < DispatchConfig::kOps; ++o) {
-        Op op = static_cast<Op>(o);
-        bool win[n];
+        const Op op = static_cast<Op>(o);
+        std::vector<double> ratio(n);
         for (int i = 0; i < n; ++i) {
             Image rgb = synth(sides[i], sides[i], 3), gray = to_gray(rgb, Backend::Sequential);
-            double s = best_ms(op, rgb, gray, Backend::Sequential, reps);
-            double p = best_ms(op, rgb, gray, Backend::OpenMP, reps);
-            win[i] = p < 0.9 * s;   // require a clear win, not noise
+            const int r = sides[i] <= 128 ? reps * 4 : reps;    // small images are cheap: repeat more
+            double s = best_ms([&] { run_op(op, rgb, gray, Backend::Sequential); }, r);
+            double p = best_ms([&] { run_op(op, rgb, gray, Backend::OpenMP); }, r);
+            ratio[i] = p / s;
+            if (gpu && op == Op::Canny) {
+                double g = best_ms([&] { cuda_canny(rgb, 50, 150, 1.4); }, r);
+                gpu_ratio[i] = g / std::min(s, p);              // GPU vs the best CPU backend
+            }
         }
-        // switch point = smallest size from which OpenMP wins at every larger size
-        int first = n;
-        while (first > 0 && win[first - 1]) --first;
-        dispatch_config().omp_min_pixels[o] =
-            first == n ? LONG_MAX : first == 0 ? 0 : static_cast<long>(sides[first]) * sides[first];
+        dispatch_config().omp_min_pixels[o] = robust ? robust_switch(sides, ratio) : strict_switch(sides, ratio);
+        if (gpu && op == Op::Canny)
+            dispatch_config().cuda_canny_min_pixels = robust ? robust_switch(sides, gpu_ratio) : strict_switch(sides, gpu_ratio);
     }
 }
 
@@ -64,6 +95,7 @@ bool save_calibration(const char* path) {
     if (!f) return false;
     for (int o = 0; o < DispatchConfig::kOps; ++o)
         std::fprintf(f, "%d %ld\n", o, dispatch_config().omp_min_pixels[o]);
+    std::fprintf(f, "cuda %ld\n", dispatch_config().cuda_canny_min_pixels);
     std::fclose(f);
     return true;
 }
@@ -71,15 +103,17 @@ bool save_calibration(const char* path) {
 bool load_calibration(const char* path) {
     FILE* f = std::fopen(path, "r");
     if (!f) return false;
-    long v[DispatchConfig::kOps];
+    long v[DispatchConfig::kOps], cuda = dispatch_config().cuda_canny_min_pixels;
     bool ok = true;
     for (int o = 0; o < DispatchConfig::kOps && ok; ++o) {
         int idx;
         ok = std::fscanf(f, "%d %ld", &idx, &v[o]) == 2 && idx == o;
     }
+    if (ok) std::fscanf(f, " cuda %ld", &cuda);                 // optional line
     std::fclose(f);
     if (!ok) return false;
     for (int o = 0; o < DispatchConfig::kOps; ++o) dispatch_config().omp_min_pixels[o] = v[o];
+    dispatch_config().cuda_canny_min_pixels = cuda;
     return true;
 }
 

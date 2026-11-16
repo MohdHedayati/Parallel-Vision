@@ -22,14 +22,38 @@ find_package(OpenMP REQUIRED COMPONENTS CXX)
 add_library(pv SHARED
   src/dispatcher.cpp
   src/calibrate.cpp
+  src/costmodel.cpp
+  src/ops.cpp
   src/mpi_backend.cpp
   src/color.cpp
   src/filters.cpp
+  src/stencil.cpp
+  src/histogram.cpp
+  src/morphology.cpp
   src/edges.cpp
   src/threshold.cpp)
+
+# ---- optional CUDA backend (needs nvcc + an NVIDIA GPU; on Windows nvcc needs MSVC, not MinGW) ----
+if(PV_WITH_CUDA)
+  enable_language(CUDA)
+  set(CMAKE_CUDA_STANDARD 17)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 60 70 75 80 86)
+  endif()
+  target_sources(pv PRIVATE src/cuda_backend.cu)
+  target_compile_definitions(pv PUBLIC PV_HAVE_CUDA)
+  # no fused multiply-add: keeps GPU rounding identical to the CPU code
+  target_compile_options(pv PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+  add_executable(pv_cuda_tests tests/test_cuda.cpp)
+  target_link_libraries(pv_cuda_tests PRIVATE pv)
+else()
+  target_sources(pv PRIVATE src/cuda_stub.cpp)
+endif()
 target_include_directories(pv PUBLIC include PRIVATE src)
 target_compile_definitions(pv PRIVATE PV_BUILD_DLL)
-target_compile_options(pv PRIVATE -Wall -Wextra -O3 -fno-math-errno)
+target_compile_options(pv PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+  $<$<COMPILE_LANGUAGE:CXX>:-O3> $<$<COMPILE_LANGUAGE:CXX>:-fno-math-errno>)
 option(PV_NATIVE "Tune for this CPU (-march=native); binary won't run on older CPUs" OFF)
 if(PV_NATIVE)
   target_compile_options(pv PRIVATE -march=native)
@@ -45,6 +69,8 @@ if(PV_WITH_MPI)
   target_link_libraries(pv_mpi_tests PRIVATE pv)
   add_executable(pv_mpi_bench bench/mpi_bench.cpp)
   target_link_libraries(pv_mpi_bench PRIVATE pv)
+  add_executable(pv_mpi_model bench/mpi_model.cpp)
+  target_link_libraries(pv_mpi_model PRIVATE pv)
 endif()
 
 # ---- tests ----
@@ -56,6 +82,23 @@ add_test(NAME pv_tests COMMAND pv_tests)
 # ---- benchmarks (synthetic images, CSV output) ----
 add_executable(pv_bench bench/bench.cpp)
 target_link_libraries(pv_bench PRIVATE pv)
+
+# every operation, sequential vs OpenMP
+add_executable(pv_ops_bench bench/ops_bench.cpp)
+target_link_libraries(pv_ops_bench PRIVATE pv)
+
+# repeatability of calibration (old rule vs robust rule)
+add_executable(pv_calib_stability bench/calib_stability.cpp)
+target_link_libraries(pv_calib_stability PRIVATE pv)
+
+# per-stage timing of Canny (Amdahl analysis; input to the CUDA projection)
+add_executable(pv_stage_times bench/stage_times.cpp)
+target_link_libraries(pv_stage_times PRIVATE pv)
+target_include_directories(pv_stage_times PRIVATE src)
+
+# fast live demo (console tables + CSVs)
+add_executable(pv_demo bench/demo.cpp)
+target_link_libraries(pv_demo PRIVATE pv)
 
 # heuristic vs calibrated dispatcher comparison (CSV + accuracy summary)
 add_executable(pv_dispatch_report bench/dispatch_report.cpp)

@@ -1,11 +1,19 @@
 calibrating (8 threads)...
-  grayscale  switch point: 147456 pixels
-  blur       switch point: 36864 pixels
-  sobel      switch point: 36864 pixels
-  threshold  switch point: 262144 pixels
-  canny      switch point: 65536 pixels
+  op               robust       strict
+  grayscale         59374        65536
+  blur              27685        36864
+  sobel             41054        36864
+  threshold        124760       147456
+  canny             32697        65536
+  median             3541         4096
+  prewitt           11940        16384
+  laplacian         20044        36864
+  equalize         103413       147456
+  erode             24975        36864
+  dilate            23922        65536
 
 dispatcher     accuracy time vs oracle
-heuristic         94.3%         100.9%
-calibrated        95.7%         100.5%
-(accuracy = choice within 10% of the faster backend; 70 cases)
+heuristic         88.3%         101.8%
+calibrated        98.1%         100.1%
+strict            98.7%         100.1%
+(accuracy = choice within 10% of the faster backend; 154 cases)

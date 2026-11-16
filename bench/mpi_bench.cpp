@@ -21,7 +21,9 @@ int main(int argc, char** argv) {
     const int reps = argc > 1 ? std::atoi(argv[1]) : 5;
     const pv::Backend local = std::getenv("PV_HYBRID") ? pv::Backend::OpenMP : pv::Backend::Sequential;
     if (rank == 0) std::printf("ranks,local_backend,size,pixels,mpi_ms\n");
+    const int max_side = argc > 2 ? std::atoi(argv[2]) : 4096;     // optional: stop early for quick demos
     for (int n : {256, 512, 1024, 2048, 4096}) {
+        if (n > max_side) continue;
         pv::Image in = rank == 0 ? make_image(n, n) : pv::Image();
         if (rank != 0) { in.width = n; in.height = n; in.channels = 3; }
         pv::mpi_canny(in, 50, 150, 1.4, local);  // warm-up

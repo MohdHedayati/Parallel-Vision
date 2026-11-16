@@ -6,8 +6,8 @@
   powershell -ExecutionPolicy Bypass -File scripts\run_all.ps1
   powershell -ExecutionPolicy Bypass -File scripts\run_all.ps1 -Image C:\path\photo.jpg -Reps 7
 
-Outputs (in results\): bench.csv, mpi.csv, mpi_hybrid.csv, dispatch.csv, vs_opencv.csv,
-dispatch.log, vs_opencv.log, and the PNG figures. Needs MSYS2 UCRT64 (g++, OpenCV, MS-MPI,
+Outputs (in results\): bench.csv, ops.csv, mpi.csv, mpi_hybrid.csv, mpi_model.csv, calib_stability.csv,
+dispatch.csv, vs_opencv.csv, stages.csv, cuda_projection.csv, dispatch.log, vs_opencv.log, summary.json and the PNG figures. Needs MSYS2 UCRT64 (g++, OpenCV, MS-MPI,
 Ninja), CMake, Microsoft MPI runtime, and Python with matplotlib + pandas.
 #>
 param(
@@ -67,7 +67,27 @@ foreach ($cfg in @(@(2,4), @(4,2))) {
 }
 Remove-Item Env:PV_HYBRID; Remove-Item Env:OMP_NUM_THREADS
 
-Step "Dispatcher report: heuristic vs calibrated vs always-sequential vs always-OpenMP"
+Step "All 11 operations: sequential vs OpenMP on 128..4096 images"
+cmd /c "build\bin\pv_ops_bench.exe 3 4096 > results\ops.csv"
+
+Step "Canny stage breakdown (gray / filters / hysteresis), sequential vs OpenMP"
+cmd /c "build\bin\pv_stage_times.exe $Reps > results\stages.csv"
+
+Step "MPI cost model: fit on 1024..3072, validate on 4096 and 5120 (2, 4, 8 ranks, plus hybrid)"
+$first = $true
+$models = @(@(2,""), @(4,""), @(8,""), @(2,"4"), @(4,"2"))      # ranks, threads-per-rank ("" = plain MPI)
+foreach ($cfg in $models) {
+    if ($cfg[1]) { $env:PV_HYBRID = "1"; $env:OMP_NUM_THREADS = $cfg[1] }
+    $lines = & $mpiexec -n $cfg[0] build\bin\pv_mpi_model.exe 3
+    Remove-Item Env:PV_HYBRID -ErrorAction SilentlyContinue; Remove-Item Env:OMP_NUM_THREADS -ErrorAction SilentlyContinue
+    if ($first) { $lines | Out-File -Encoding ascii results\mpi_model.csv; $first = $false }
+    else        { $lines | Select-Object -Skip 1 | Out-File -Append -Encoding ascii results\mpi_model.csv }
+}
+
+Step "Calibration repeatability: old rule vs robust rule, 5 runs each"
+cmd /c "build\bin\pv_calib_stability.exe 5 > results\calib_stability.csv 2> nul"
+
+Step "Dispatcher report: heuristic vs calibrated vs always-sequential vs always-OpenMP (all 11 operations)"
 cmd /c "build\bin\pv_dispatch_report.exe 7 > results\dispatch.csv 2> results\dispatch.log"
 Get-Content results\dispatch.log
 

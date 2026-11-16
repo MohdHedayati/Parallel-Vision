@@ -1,8 +1,10 @@
 // MPI backend: row-strip decomposition with halo exchange. See pv.hpp for the contract.
 #include "internal.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <thread>
 
 #ifdef PV_HAVE_MPI
 #include <mpi.h>
@@ -23,6 +25,18 @@ void mpi_finalize() {
 int mpi_rank() { int r = 0; MPI_Comm_rank(MPI_COMM_WORLD, &r); return r; }
 int mpi_size() { int n = 1; MPI_Comm_size(MPI_COMM_WORLD, &n); return n; }
 void mpi_barrier() { MPI_Barrier(MPI_COMM_WORLD); }
+
+// A normal barrier busy-polls, which steals CPU from a rank that is being timed. This one
+// sleeps between polls so a single rank can be measured fairly while the others wait.
+void mpi_sleep_barrier() {
+    MPI_Request req;
+    MPI_Ibarrier(MPI_COMM_WORLD, &req);
+    int done = 0;
+    while (!done) {
+        MPI_Test(&req, &done, MPI_STATUS_IGNORE);
+        if (!done) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
 
 Image mpi_canny(const Image& in, double low, double high, double sigma, Backend local) {
     const int rank = mpi_rank(), size = mpi_size();
@@ -90,6 +104,40 @@ Image mpi_canny(const Image& in, double low, double high, double sigma, Backend 
                                           local == Backend::OpenMP ? Backend::OpenMP : Backend::Sequential);
 }
 
+LinearCost fit_mpi_cost(Backend local, int reps) {
+    static const int kSides[] = {1024, 1536, 2048, 2560, 3072};   // same sizes as fit_cost()
+    const int rank = mpi_rank();
+    std::vector<double> px, ms;
+    for (int side : kSides) {
+        Image im;
+        if (rank == 0) {
+            im = Image(side, side, 3);
+            for (int y = 0; y < side; ++y)
+                for (int x = 0; x < side * 3; ++x)
+                    im.row(y)[x] = static_cast<uint8_t>(((x / 48 + y / 16) % 2) * 200 + (x * y) % 50);
+        } else {
+            im.width = side; im.height = side; im.channels = 3;   // dimensions only; ignored off-root
+        }
+        mpi_canny(im, 50, 150, 1.4, local);                       // warm-up
+        double best = 1e30;
+        for (int i = 0; i < reps; ++i) {
+            mpi_barrier();
+            auto t0 = std::chrono::steady_clock::now();
+            mpi_canny(im, 50, 150, 1.4, local);
+            mpi_barrier();
+            double t = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (t < best) best = t;
+        }
+        px.push_back(static_cast<double>(side) * side);
+        ms.push_back(best);
+    }
+    LinearCost c = detail::linear_fit(px, ms);
+    double buf[2] = {c.a_ms, c.b_ns_per_px};
+    MPI_Bcast(buf, 2, MPI_DOUBLE, 0, MPI_COMM_WORLD);             // every rank gets rank 0's fit
+    c.a_ms = buf[0]; c.b_ns_per_px = buf[1];
+    return c;
+}
+
 } // namespace pv
 
 #else  // built without MPI
@@ -100,6 +148,10 @@ void  mpi_finalize() {}
 int   mpi_rank() { return 0; }
 int   mpi_size() { return 1; }
 void  mpi_barrier() {}
+void  mpi_sleep_barrier() {}
+LinearCost fit_mpi_cost(Backend, int) {
+    throw std::runtime_error("Parallel-Vision was built without MPI (configure with -DPV_WITH_MPI=ON)");
+}
 Image mpi_canny(const Image&, double, double, double, Backend) {
     throw std::runtime_error("Parallel-Vision was built without MPI (configure with -DPV_WITH_MPI=ON)");
 }

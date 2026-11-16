@@ -25,8 +25,9 @@ static cv::Mat to_mat(const pv::Image& im) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::printf("usage: pv <canny|sobel|blur|gray|threshold> in out [--backend auto|seq|omp]\n"
-                    "          [--low N] [--high N] [--sigma S] [--t N|otsu]\n"
+        std::printf("usage: pv <command> in out [--backend auto|seq|omp|cuda]\n"
+                    "  commands: canny sobel prewitt laplacian blur median gray threshold equalize erode dilate\n"
+                    "          [--low N] [--high N] [--sigma S] [--t N|otsu] [--radius R]\n"
                     "          [--calibrate | --use-calibration]\n");
         return 1;
     }
@@ -34,6 +35,7 @@ int main(int argc, char** argv) {
     pv::Backend backend = pv::Backend::Auto;
     double low = 50, high = 150, sigma = 1.4;
     int thr = -1;  // -1 = otsu
+    int radius = 1;
     for (int i = 4; i < argc; ) {
         std::string k = argv[i];
         if (k == "--calibrate") {   // measure switch points now and cache them
@@ -49,11 +51,12 @@ int main(int argc, char** argv) {
         if (i + 1 >= argc) break;
         std::string v = argv[i + 1];
         i += 2;
-        if (k == "--backend") backend = v == "seq" ? pv::Backend::Sequential : v == "omp" ? pv::Backend::OpenMP : pv::Backend::Auto;
+        if (k == "--backend") backend = v == "seq" ? pv::Backend::Sequential : v == "omp" ? pv::Backend::OpenMP : v == "cuda" ? pv::Backend::CUDA : pv::Backend::Auto;
         else if (k == "--low") low = std::atof(v.c_str());
         else if (k == "--high") high = std::atof(v.c_str());
         else if (k == "--sigma") sigma = std::atof(v.c_str());
         else if (k == "--t") thr = v == "otsu" ? -1 : std::atoi(v.c_str());
+        else if (k == "--radius") radius = std::atoi(v.c_str());
     }
 
     cv::Mat src = cv::imread(argv[2], cv::IMREAD_COLOR);
@@ -66,6 +69,12 @@ int main(int argc, char** argv) {
     else if (cmd == "sobel") out = pv::sobel(pv::to_gray(in, backend), backend);
     else if (cmd == "blur") out = pv::gaussian_blur(pv::to_gray(in, backend), sigma, backend);
     else if (cmd == "gray") out = pv::to_gray(in, backend);
+    else if (cmd == "prewitt") out = pv::prewitt(pv::to_gray(in, backend), backend);
+    else if (cmd == "laplacian") out = pv::laplacian(pv::to_gray(in, backend), backend);
+    else if (cmd == "median") out = pv::median_filter(pv::to_gray(in, backend), radius, backend);
+    else if (cmd == "equalize") out = pv::equalize_hist(pv::to_gray(in, backend), backend);
+    else if (cmd == "erode") out = pv::erode(pv::to_gray(in, backend), radius, backend);
+    else if (cmd == "dilate") out = pv::dilate(pv::to_gray(in, backend), radius, backend);
     else if (cmd == "threshold") {
         pv::Image g = pv::to_gray(in, backend);
         out = pv::threshold(g, thr < 0 ? pv::otsu_threshold(g) : thr, backend);
